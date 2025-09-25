@@ -1,0 +1,16 @@
+{
+  "report-type": "commit",
+  "table-name": "${table}",
+  "snapshot-id": 0,
+  "sequence-number": 0,
+  "operation": "append",
+  "metrics": {
+    "record-count": {
+      "unit": "count",
+      "value": 0
+    }
+  },
+  "metadata": {
+    "generated-at": "${timestamp_ms}"
+  }
+}

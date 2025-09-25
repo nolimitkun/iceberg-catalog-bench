@@ -1,0 +1,291 @@
+storage:
+  warehouse_uri: "abfss://iceberg-warehouse@${ADLS_ACCOUNT}.dfs.core.windows.net/"
+  staging_uri: "abfss://staging@${ADLS_ACCOUNT}.dfs.core.windows.net/"
+  account: "${ADLS_ACCOUNT}"
+  container: "iceberg-warehouse"
+
+catalogs:
+  open_catalog:
+    name: polaris_open
+    type: open_catalog
+    description: "Snowflake Polaris / Open Catalog"
+    options:
+      namespace_root: "interop"
+      warehouse_subdir: "iceberg-warehouse/interop"
+  unity_catalog:
+    name: databricks_uc
+    type: unity_catalog
+    description: "Azure Databricks Unity Catalog"
+    options:
+      catalog_name: "interop_uc"
+      schema_prefix: "interop"
+
+engines:
+  spark:
+    name: spark
+    type: spark
+    enabled: true
+    connection:
+      master: "local[*]"
+      app_name: "IcebergInteropSpark"
+      conf:
+        spark.sql.shuffle.partitions: "8"
+        spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+    session_conf:
+      spark.sql.catalog.spark_catalog: org.apache.iceberg.spark.SparkSessionCatalog
+    sql_variables:
+      engine_name: "spark"
+    catalog_overrides:
+      open_catalog:
+        session_conf:
+          spark.sql.defaultCatalog: interop
+          spark.sql.catalog.interop: org.apache.iceberg.spark.SparkCatalog
+          spark.sql.catalog.interop.type: rest
+          spark.sql.catalog.interop.uri: "${POLARIS_REST_URI}"
+          spark.sql.catalog.interop.warehouse: "${POLARIS_WAREHOUSE_URI}"
+        options:
+          catalog_name: interop
+          namespace_template: "{{ catalog.options.namespace_root }}.{{ namespace }}_{{ run_id }}"
+      unity_catalog:
+        session_conf:
+          spark.sql.defaultCatalog: interop_uc
+          spark.sql.catalog.interop_uc: org.apache.iceberg.spark.SparkCatalog
+          spark.sql.catalog.interop_uc.type: hive
+          spark.sql.catalog.interop_uc.warehouse: "${UNITY_WAREHOUSE_LOCATION}"
+        options:
+          catalog_name: "interop_uc"
+          namespace_template: "{{ catalog.options.schema_prefix }}_{{ namespace }}_{{ run_id }}"
+
+  databricks:
+    name: databricks
+    type: databricks
+    enabled: true
+    connection:
+      host: "${DATABRICKS_HOST}"
+      http_path: "${DATABRICKS_HTTP_PATH}"
+      token: "${DATABRICKS_TOKEN}"
+      max_result_rows: 200
+    sql_variables:
+      engine_name: "databricks"
+    catalog_overrides:
+      unity_catalog:
+        options:
+          catalog: "interop_uc"
+          namespace_template: "{{ catalog.options.schema_prefix }}_{{ namespace }}_{{ run_id }}"
+
+  snowflake:
+    name: snowflake
+    type: snowflake
+    enabled: true
+    connection:
+      account: "${SNOWFLAKE_ACCOUNT}"
+      user: "${SNOWFLAKE_USER}"
+      password: "${SNOWFLAKE_PASSWORD}"
+      role: "${SNOWFLAKE_ROLE}"
+      warehouse: "${SNOWFLAKE_WAREHOUSE}"
+      max_result_rows: 200
+    sql_variables:
+      engine_name: "snowflake"
+    catalog_overrides:
+      open_catalog:
+        database: "${SNOWFLAKE_DATABASE}"
+        options:
+          catalog_name: "${POLARIS_CATALOG_NAME}"
+          external_volume: "${SNOWFLAKE_EXTERNAL_VOLUME}"
+          base_location_prefix: "${POLARIS_BASE_LOCATION_PREFIX}"
+          namespace_template: "{{ namespace | upper }}_{{ run_id }}"
+
+
+datasets:
+  small_sales_events:
+    name: small_sales_events
+    rows: 8
+    columns:
+      - { name: event_id, type: bigint }
+      - { name: tenant_id, type: int }
+      - { name: event_ts, type: timestamp }
+      - { name: sku, type: string }
+      - { name: qty, type: int }
+      - { name: price, type: decimal(18,2) }
+      - { name: country, type: string }
+      - { name: ds, type: date }
+    partition_spec:
+      - { transform: days, column: event_ts }
+      - { transform: bucket, column: tenant_id, num_buckets: 16 }
+    sort_order:
+      - event_ts
+      - tenant_id
+    table_properties:
+      write.distribution-mode: hash
+      format-version: 2
+      commit.manifest.min-count-to-merge: 100
+
+
+test_cases:
+  bootstrap_namespace:
+    name: bootstrap_namespace
+    description: "Create interoperable namespace in target catalog"
+    scripts:
+      spark:
+        open_catalog: sql/spark/open_catalog/bootstrap_namespace.sql
+        unity_catalog: sql/spark/unity_catalog/bootstrap_namespace.sql
+      databricks:
+        unity_catalog: sql/databricks/unity_catalog/bootstrap_namespace.sql
+    variables:
+      table_name: sales_events
+
+  create_sales_events:
+    name: create_sales_events
+    description: "Create Iceberg v2 sales_events table"
+    scripts:
+      spark:
+        open_catalog: sql/spark/open_catalog/create_sales_events.sql
+        unity_catalog: sql/spark/unity_catalog/create_sales_events.sql
+      databricks:
+        unity_catalog: sql/databricks/unity_catalog/create_sales_events.sql
+      snowflake:
+        open_catalog: sql/snowflake/open_catalog/create_sales_events.sql
+    variables:
+      table_name: sales_events
+
+  bulk_insert_sales_events:
+    name: bulk_insert_sales_events
+    description: "Load baseline dataset into sales_events"
+    scripts:
+      spark:
+        open_catalog: sql/spark/open_catalog/bulk_insert_sales_events.sql
+        unity_catalog: sql/spark/unity_catalog/bulk_insert_sales_events.sql
+    variables:
+      table_name: sales_events
+
+  databricks_schema_evolution:
+    name: databricks_schema_evolution
+    description: "Add channel column and rename SKU via Databricks"
+    scripts:
+      databricks:
+        unity_catalog: sql/databricks/unity_catalog/schema_evolution_sales_events.sql
+    variables:
+      table_name: sales_events
+
+  databricks_append_sales_events:
+    name: databricks_append_sales_events
+    description: "Append new sales events with channel column"
+    scripts:
+      databricks:
+        unity_catalog: sql/databricks/unity_catalog/append_sales_events.sql
+    variables:
+      table_name: sales_events
+
+  snowflake_merge_sales_events:
+    name: snowflake_merge_sales_events
+    description: "Merge updates/deletes from Snowflake"
+    scripts:
+      snowflake:
+        open_catalog: sql/snowflake/open_catalog/merge_sales_events.sql
+    variables:
+      table_name: sales_events
+
+  snowflake_read_counts:
+    name: snowflake_read_counts
+    description: "Read counts and snapshots from Snowflake"
+    scripts:
+      snowflake:
+        open_catalog: sql/snowflake/open_catalog/read_counts.sql
+    variables:
+      table_name: sales_events
+
+  spark_time_travel_validate:
+    name: spark_time_travel_validate
+    description: "Validate time travel semantics from Spark"
+    scripts:
+      spark:
+        open_catalog: sql/spark/open_catalog/time_travel_validate.sql
+    variables:
+      table_name: sales_events
+
+  databricks_read_checksums:
+    name: databricks_read_checksums
+    description: "Aggregate results from Databricks"
+    scripts:
+      databricks:
+        unity_catalog: sql/databricks/unity_catalog/read_checksums.sql
+    variables:
+      table_name: sales_events
+
+
+plans:
+  interop_small:
+    name: interop_small
+    description: "Cross-engine CRUD + schema evolution flow on small dataset"
+    steps:
+      - name: bootstrap_open_namespace
+        test_case: bootstrap_namespace
+        engine: spark
+        catalog: open_catalog
+        dataset: small_sales_events
+      - name: create_table_open
+        test_case: create_sales_events
+        engine: spark
+        catalog: open_catalog
+        dataset: small_sales_events
+      - name: load_baseline_with_spark
+        test_case: bulk_insert_sales_events
+        engine: spark
+        catalog: open_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ dataset.rows }}"
+          - type: store_rowcount_as
+            statement_index: -2
+            name: baseline_rowcount
+          - type: store_rows_as
+            statement_index: -1
+            name: baseline_snapshot
+      - name: schema_evolution_databricks
+        test_case: databricks_schema_evolution
+        engine: databricks
+        catalog: unity_catalog
+        dataset: small_sales_events
+      - name: append_databricks
+        test_case: databricks_append_sales_events
+        engine: databricks
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: store_rows_as
+            statement_index: -1
+            name: post_append_counts
+      - name: snowflake_merge
+        test_case: snowflake_merge_sales_events
+        engine: snowflake
+        catalog: open_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_at_least
+            statement_index: -2
+            threshold: 5
+      - name: snowflake_readback
+        test_case: snowflake_read_counts
+        engine: snowflake
+        catalog: open_catalog
+        dataset: small_sales_events
+        validations:
+          - type: store_rows_as
+            statement_index: -1
+            name: snowflake_snapshots
+      - name: time_travel_spark
+        test_case: spark_time_travel_validate
+        engine: spark
+        catalog: open_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.baseline_rowcount }}"
+      - name: databricks_checksums
+        test_case: databricks_read_checksums
+        engine: databricks
+        catalog: unity_catalog
+        dataset: small_sales_events

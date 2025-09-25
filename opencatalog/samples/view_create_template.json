@@ -1,0 +1,41 @@
+{
+  "location": "__AUTO__",
+  "properties": {
+    "comment": "Sample view created via harness"
+  },
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {
+        "id": 1,
+        "name": "id",
+        "type": "long",
+        "required": true
+      },
+      {
+        "id": 2,
+        "name": "name",
+        "type": "string",
+        "required": false
+      }
+    ]
+  },
+  "view-version": {
+    "version-id": 1,
+    "timestamp-ms": ${timestamp_ms},
+    "schema-id": 1,
+    "summary": {
+      "operation": "create"
+    },
+    "representations": [
+      {
+        "type": "sql",
+        "dialect": "spark",
+        "sql": "SELECT id, name FROM ${catalog}.${namespace}.${table}"
+      }
+    ],
+    "default-namespace": [
+      "${namespace}"
+    ]
+  }
+}
