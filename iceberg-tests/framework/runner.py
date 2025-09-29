@@ -89,6 +89,8 @@ class Runner:
                     sep = resolved_options.get("namespace_separator", ".")
                     target_namespace = f"{ns_root}{sep}{namespace}"
 
+        test_case_dict = test_case.model_dump()
+
         base: Dict[str, Any] = {
             "run_id": run_id,
             "namespace": namespace,
@@ -99,6 +101,7 @@ class Runner:
             "storage": framework.storage.model_dump(),
             "now_utc": datetime.utcnow().isoformat(),
             "state": self.state,
+            "test_case": test_case_dict,
         }
         if catalog_override_dict:
             base["catalog_override"] = catalog_override_dict
@@ -113,6 +116,7 @@ class Runner:
             variables["engine_catalog"] = catalog_override_dict
         if test_case.variables:
             variables.update(test_case.variables)
+        variables["test_case"] = test_case_dict
         if step.variables:
             variables.update(step.variables)
         return base, variables
