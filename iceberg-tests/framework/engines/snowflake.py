@@ -17,8 +17,8 @@ class SnowflakeEngineAdapter(EngineAdapter):
         connection = dict(self.engine_config.connection)
         if self.catalog_override.database and "database" not in connection:
             connection["database"] = self.catalog_override.database
-        if self.catalog_override.schema and "schema" not in connection:
-            connection["schema"] = self.catalog_override.schema
+        if self.catalog_override.schema_name and "schema" not in connection:
+            connection["schema"] = self.catalog_override.schema_name
         connection.setdefault("client_session_keep_alive", True)
 
         key_path = connection.pop("private_key_path", None)

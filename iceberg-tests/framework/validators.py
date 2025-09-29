@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
-from .engines.base import ExecutionResult
+from .engines.base import ExecutionResult, StatementResult
 from .sql import render_sql_template
 
 
@@ -47,14 +47,14 @@ def apply_validations(
             if vtype == "rowcount_equals":
                 statement = _get_statement(execution_result, validation.get("statement_index", -1))
                 expected = int(_render_value(validation.get("expected"), variables))
-                actual = statement.rowcount
+                actual = _derive_rowcount(statement)
                 if actual != expected:
                     raise ValidationError(f"Rowcount mismatch: expected={expected} actual={actual}")
                 outcomes.append(ValidationOutcome(validation, True))
             elif vtype == "rowcount_at_least":
                 statement = _get_statement(execution_result, validation.get("statement_index", -1))
                 threshold = int(_render_value(validation.get("threshold"), variables))
-                actual = statement.rowcount or 0
+                actual = _derive_rowcount(statement) or 0
                 if actual < threshold:
                     raise ValidationError(f"Rowcount {actual} below threshold {threshold}")
                 outcomes.append(ValidationOutcome(validation, True))
@@ -70,7 +70,7 @@ def apply_validations(
                 key = validation.get("name")
                 if not key:
                     raise ValidationError("store_rowcount_as validation missing 'name'")
-                state[key] = statement.rowcount
+                state[key] = _derive_rowcount(statement)
                 outcomes.append(ValidationOutcome(validation, True))
             elif vtype == "compare_rows_with_state":
                 statement = _get_statement(execution_result, validation.get("statement_index", -1))
@@ -85,3 +85,30 @@ def apply_validations(
             outcomes.append(ValidationOutcome(validation, False, str(exc)))
             raise
     return outcomes
+def _derive_rowcount(statement: StatementResult) -> int | None:
+    if statement.rows:
+        first_row = statement.rows[0]
+        if isinstance(first_row, dict):
+            for key in ("row_count", "count", "count(1)", "count(*)"):
+                if key in first_row:
+                    try:
+                        return int(first_row[key])
+                    except (TypeError, ValueError):
+                        pass
+            if len(first_row) == 1:
+                try:
+                    return int(next(iter(first_row.values())))
+                except (StopIteration, TypeError, ValueError):
+                    pass
+        elif isinstance(first_row, (list, tuple)):
+            if first_row:
+                try:
+                    return int(first_row[0])
+                except (TypeError, ValueError):
+                    pass
+    if statement.rowcount is not None:
+        try:
+            return int(statement.rowcount)
+        except (TypeError, ValueError):
+            return None
+    return None

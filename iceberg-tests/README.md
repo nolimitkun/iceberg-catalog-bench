@@ -72,7 +72,6 @@ Each test case is backed by SQL stored in `sql/<engine>/<catalog>/...`. Scripts 
 
 Example (excerpt from `sql/spark/open_catalog/bulk_insert_sales_events.sql`):
 ```sql
-SET spark.sql.defaultCatalog='{{ engine_catalog.options.catalog_name }}';
 INSERT INTO {{ target_namespace }}.{{ test_case.variables.table_name }} VALUES (...);
 SELECT COUNT(*) AS row_count FROM {{ target_namespace }}.{{ test_case.variables.table_name }};
 ```

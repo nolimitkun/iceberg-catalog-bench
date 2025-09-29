@@ -1,4 +1,4 @@
-USE CATALOG {{ engine_catalog.options.catalog_name }};
+
 
 SELECT COUNT(*) AS current_row_count
 FROM {{ target_namespace }}.{{ test_case.variables.table_name }};

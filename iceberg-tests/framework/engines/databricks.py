@@ -20,7 +20,7 @@ class DatabricksEngineAdapter(EngineAdapter):
         http_path = connection.get("http_path") or options.get("http_path")
         access_token = connection.get("token") or connection.get("access_token")
         catalog = options.get("catalog") or self.catalog_override.database
-        schema = options.get("schema") or self.catalog_override.schema
+        schema = options.get("schema") or self.catalog_override.schema_name
 
         if not server_hostname or not http_path or not access_token:
             raise RuntimeError("Databricks connection requires host/http_path/token")

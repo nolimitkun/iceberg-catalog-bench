@@ -1,4 +1,4 @@
-USE CATALOG {{ engine_catalog.options.catalog_name }};
+
 
 INSERT INTO {{ target_namespace }}.{{ test_case.variables.table_name }} VALUES
   (1, 10, TIMESTAMP '2024-01-01 00:00:00', 'sku-0001', 3, 19.99, 'US', DATE '2024-01-01'),

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, ConfigDict
 
 
 class StorageConfig(BaseModel):
@@ -22,11 +22,16 @@ class CatalogConfig(BaseModel):
 
 
 class EngineCatalogOverride(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     session_conf: Dict[str, Any] = Field(default_factory=dict)
     sql_variables: Dict[str, Any] = Field(default_factory=dict)
     options: Dict[str, Any] = Field(default_factory=dict)
     database: Optional[str] = None
-    schema: Optional[str] = None
+    schema_name: Optional[str] = Field(default=None, alias="schema")
+
+    def model_dump(self, *args, **kwargs):
+        kwargs.setdefault("by_alias", True)
+        return super().model_dump(*args, **kwargs)
 
 
 class EngineConfig(BaseModel):
