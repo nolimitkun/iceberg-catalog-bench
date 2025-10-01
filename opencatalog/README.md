@@ -32,8 +32,8 @@ The main entry point is `scripts/opencatalog_api_tester.py`. It handles OAuth to
 
 ```bash
 python scripts/opencatalog_api_tester.py \
-  --catalog open_snowflake \
-  --namespace open_snowflake
+  --catalog rest_test \
+  --namespace rest_test
 ```
 
 This verifies:
@@ -47,8 +47,8 @@ Add `--include-writes` to create a scratch namespace, update it, and tear it dow
 
 ```bash
 python scripts/opencatalog_api_tester.py \
-  --catalog open_snowflake \
-  --namespace open_snowflake \
+  --catalog rest_test \
+  --namespace rest_test \
   --include-writes
 ```
 
@@ -60,8 +60,8 @@ Supply JSON templates from the `samples/` directory (or your own) to exercise ad
 
 ```bash
 python scripts/opencatalog_api_tester.py \
-  --catalog open_snowflake \
-  --namespace open_snowflake \
+  --catalog rest_test \
+  --namespace rest_test \
   --include-writes \
   --table-create-spec samples/table_create_template.json \
   --view-create-spec samples/view_create_template.json \
@@ -107,13 +107,13 @@ Adapt these to your environment as needed (e.g., update SQL dialect, schema IDs,
 The older curl examples are still useful for quick checks:
 
 ```bash
-curl https://${OC_ACCOUNT}/api/management/v1/catalogs/open_snowflake \
+curl https://${OC_ACCOUNT}/api/management/v1/catalogs/rest_test \
   -H "Authorization: Bearer ${POLARIS_TOKEN}" | jq
 
-curl https://${OC_ACCOUNT}/api/catalog/v1/open_snowflake/namespaces \
+curl https://${OC_ACCOUNT}/api/catalog/v1/rest_test/namespaces \
   -H "Authorization: Bearer ${POLARIS_TOKEN}" | jq
 
-curl https://${OC_ACCOUNT}/api/catalog/v1/open_snowflake/namespaces/open_snowflake \
+curl https://${OC_ACCOUNT}/api/catalog/v1/rest_test/namespaces/rest_test \
   -H "Authorization: Bearer ${POLARIS_TOKEN}" | jq
 
 curl -sS -X PUT https://${OC_ACCOUNT}/api/management/v1/catalogs/rest_test \
@@ -151,3 +151,52 @@ curl -sS -X PUT https://${OC_ACCOUNT}/api/management/v1/catalogs/rest_test \
 - **Storage path errors** during table/view creation: update your template to use a location within the catalog’s configured base path, or rely on the `__AUTO__` helper.
 
 Feel free to extend `scripts/opencatalog_api_tester.py` with additional `HttpTest` definitions for scenarios specific to your deployment.
+
+## Resaults
+
+```
+== Management API ==
+[EXP] List catalogs: 403 | {"error":{"message":"Principal 'spark' with activated PrincipalRoles '[spark]' and activated grants via '[spark]' is not authorized for op LIST_CATALOGS","type"
+[PASS] Describe catalog: 200 | {"type":"INTERNAL","name":"rest_test","properties":{"default-base-location":"abfss://resttest@sfoc.blob.core.windows.net/"},"createTimestamp":1758476086933,"las
+[EXP] List catalog roles: 403 | {"error":{"message":"Principal 'spark' with activated PrincipalRoles '[spark]' and activated grants via '[spark, rw]' is not authorized for op LIST_CATALOG_ROLE
+[EXP] List principal roles: 403 | {"error":{"message":"Principal 'spark' with activated PrincipalRoles '[spark]' and activated grants via '[spark]' is not authorized for op LIST_PRINCIPAL_ROLES"
+
+== Catalog API ==
+[PASS] Get config: 200 | {"defaults":{"default-base-location":"abfss://resttest@sfoc.blob.core.windows.net/"},"overrides":{"prefix":"rest_test"},"endpoints":["GET /v1/{prefix}/namespace
+[PASS] List namespaces: 200 | {"namespaces":[["rest_test"]],"next-page-token":null}
+[PASS] Describe namespace: 200 | {"namespace":["rest_test"],"properties":{"location":"abfss://resttest@sfoc.blob.core.windows.net/rest_test"}}
+[PASS] Namespace exists: 204
+[PASS] List tables: 200 | {"identifiers":[],"next-page-token":null}
+[PASS] List views: 200 | {"identifiers":[],"next-page-token":null}
+[EXP] Get applicable policies: 406 | {"error":{"message":"Feature not enabled: ENABLE_POLICY_STORE","type":"UnsupportedOperationException","code":406}}
+
+== Management Writes ==
+[PASS] Update catalog default base location: 200 | {"type":"INTERNAL","name":"rest_test","properties":{"default-base-location":"abfss://resttest@sfoc.blob.core.windows.net/codex-1759337139"},"createTimestamp":17
+[PASS] Revert catalog default base location: 200 | {"type":"INTERNAL","name":"rest_test","properties":{"default-base-location":"abfss://resttest@sfoc.blob.core.windows.net/"},"createTimestamp":1758476086933,"las
+[PASS] Update catalog allowed locations: 200 | {"type":"INTERNAL","name":"rest_test","properties":{"default-base-location":"abfss://resttest@sfoc.blob.core.windows.net/"},"createTimestamp":1758476086933,"las
+[PASS] Revert catalog allowed locations: 200 | {"type":"INTERNAL","name":"rest_test","properties":{"default-base-location":"abfss://resttest@sfoc.blob.core.windows.net/"},"createTimestamp":1758476086933,"las
+
+== Catalog Writes ==
+[PASS] Create namespace (write): 200 | {"namespace":["rest_test_codex_1759337143"],"properties":{"created-at":"1759337143","location":"abfss://resttest@sfoc.blob.core.windows.net/rest_test_codex_1759
+[PASS] Update namespace properties: 200 | {"removed":[],"updated":["owner"],"missing":[]}
+[PASS] Namespace exists (write): 204
+[PASS] Create table: 200 | {"metadata-location":"abfss://resttest@sfoc.blob.core.windows.net/rest_test_codex_1759337143/rest_test_codex_1759337143_tbl_1759337143/metadata/00000-75b02161-4
+[PASS] Load table: 200 | {"metadata-location":"abfss://resttest@sfoc.blob.core.windows.net/rest_test_codex_1759337143/rest_test_codex_1759337143_tbl_1759337143/metadata/00000-75b02161-4
+[PASS] Table exists: 204
+
+== View Writes ==
+[PASS] Create view: 200 | {"metadata-location":"abfss://resttest@sfoc.blob.core.windows.net/rest_test_codex_1759337143/rest_test_codex_1759337143_view_1759337150/metadata/00000-17cf61fe-
+[PASS] Load view: 200 | {"metadata-location":"abfss://resttest@sfoc.blob.core.windows.net/rest_test_codex_1759337143/rest_test_codex_1759337143_view_1759337150/metadata/00000-17cf61fe-
+[PASS] View exists: 204
+[PASS] Replace view: 200 | {"metadata-location":"abfss://resttest@sfoc.blob.core.windows.net/rest_test_codex_1759337143/rest_test_codex_1759337143_view_1759337150/metadata/00000-17cf61fe-
+
+== Table Metrics ==
+[PASS] Report table metrics: 204
+
+== Cleanup ==
+[PASS] Drop table: 204
+[PASS] Drop view: 204
+[PASS] Drop namespace: 204
+
+Executed 29 calls | Passed: 29 | Expected: 4 | Failed: 0
+```
