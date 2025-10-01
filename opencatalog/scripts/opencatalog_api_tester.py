@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
@@ -182,6 +183,17 @@ def _safe_excerpt(response: Response, limit: int = 500) -> str:
     return text[:limit]
 
 
+def _append_location_suffix(location: str, suffix: str) -> str:
+    base = (location or "").rstrip("/")
+    if not base:
+        return suffix
+    if "://" in base:
+        scheme, rest = base.split("://", 1)
+        rest = rest.rstrip("/")
+        return f"{scheme}://{rest}/{suffix}"
+    return f"{base}/{suffix}"
+
+
 def _template_variables(context: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     now = time.time()
     vars_map: Dict[str, Any] = {
@@ -234,6 +246,27 @@ def load_configuration() -> Tuple[str, str, str, str]:
 
 def build_management_tests(ctx: Dict[str, Any]) -> List[HttpTest]:
     catalog = ctx.get("catalog")
+
+    def capture_catalog_details(context: Dict[str, Any], response: Response) -> None:
+        try:
+            payload = response.json()
+        except ValueError:
+            return
+        if not isinstance(payload, dict):
+            return
+        entity_version = payload.get("entityVersion") or payload.get("entity-version")
+        if entity_version is not None:
+            context["catalog_entity_version"] = entity_version
+        properties = payload.get("properties")
+        if isinstance(properties, dict):
+            context["catalog_properties"] = properties
+            default_base = properties.get("default-base-location")
+            if default_base:
+                context["default_base_location"] = default_base
+        storage_config = payload.get("storageConfigInfo") or payload.get("storage-config-info")
+        if isinstance(storage_config, dict):
+            context["catalog_storage_config"] = storage_config
+
     return [
         HttpTest(
             name="List catalogs",
@@ -249,6 +282,7 @@ def build_management_tests(ctx: Dict[str, Any]) -> List[HttpTest]:
             base="management",
             path_template="/catalogs/{catalog}",
             description="Fetch metadata for the target catalog.",
+            capture=capture_catalog_details,
         ),
         HttpTest(
             name="List catalog roles",
@@ -267,6 +301,170 @@ def build_management_tests(ctx: Dict[str, Any]) -> List[HttpTest]:
             expected_status_codes=(403,),
         ),
     ]
+
+
+def build_management_write_tests(ctx: Dict[str, Any]) -> List[HttpTest]:
+    entity_version = ctx.get("catalog_entity_version")
+    if entity_version is None:
+        return []
+
+    properties = ctx.get("catalog_properties") or {}
+    storage_config = ctx.get("catalog_storage_config") or {}
+
+    default_base = properties.get("default-base-location")
+    allowed_locations: List[Any] = []
+    if isinstance(storage_config, dict):
+        raw_allowed = storage_config.get("allowedLocations")
+        if isinstance(raw_allowed, list) and raw_allowed:
+            allowed_locations = raw_allowed
+
+    state: Dict[str, Any] = {"current_version": entity_version}
+    suffix = f"codex-{int(time.time())}"
+    tests: List[HttpTest] = []
+
+    if isinstance(default_base, str) and default_base:
+        revert_properties = deepcopy(properties)
+        updated_properties = deepcopy(properties)
+        updated_properties["default-base-location"] = _append_location_suffix(default_base, suffix)
+        state["properties"] = {
+            "revert": revert_properties,
+            "updated": updated_properties,
+        }
+
+    if allowed_locations:
+        original_location = allowed_locations[0]
+        if not isinstance(original_location, str) or not original_location:
+            original_location = None
+        if original_location:
+            updated_locations = list(allowed_locations)
+            updated_locations[0] = _append_location_suffix(original_location, suffix)
+        revert_storage = deepcopy(storage_config)
+        updated_storage = deepcopy(storage_config)
+        if original_location:
+            updated_storage["allowedLocations"] = updated_locations
+            state["storage"] = {
+                "revert": revert_storage,
+                "updated": updated_storage,
+            }
+
+    if "properties" not in state and "storage" not in state:
+        return []
+
+    ctx["catalog_update_state"] = state
+
+    def make_update_body(target: str) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+        def builder(context: Dict[str, Any]) -> Dict[str, Any]:
+            state = context.get("catalog_update_state") or {}
+            current_version = state.get("current_version")
+            if current_version is None:
+                raise ValueError("catalog entity version missing for update")
+            body: Dict[str, Any] = {"currentEntityVersion": current_version}
+            if target == "properties":
+                body["properties"] = deepcopy(state.get("properties", {}).get("updated") or {})
+            elif target == "storage":
+                body["storageConfigInfo"] = deepcopy(state.get("storage", {}).get("updated") or {})
+            else:
+                raise ValueError(f"unknown catalog update target: {target}")
+            return body
+
+        return builder
+
+    def make_revert_body(target: str) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+        def builder(context: Dict[str, Any]) -> Dict[str, Any]:
+            state = context.get("catalog_update_state") or {}
+            current_version = state.get("current_version")
+            if current_version is None:
+                raise ValueError("catalog entity version missing for revert")
+            body: Dict[str, Any] = {"currentEntityVersion": current_version}
+            if target == "properties":
+                body["properties"] = deepcopy(state.get("properties", {}).get("revert") or {})
+            elif target == "storage":
+                body["storageConfigInfo"] = deepcopy(state.get("storage", {}).get("revert") or {})
+            else:
+                raise ValueError(f"unknown catalog update target: {target}")
+            return body
+
+        return builder
+
+    def capture_catalog_update(target: str) -> Callable[[Dict[str, Any], Response], None]:
+        def handler(context: Dict[str, Any], response: Response) -> None:
+            if response.status_code not in SUCCESS_CODES:
+                return
+            try:
+                payload = response.json()
+            except ValueError:
+                return
+            state = context.get("catalog_update_state") or {}
+            entity_version_value = payload.get("entityVersion") or payload.get("entity-version")
+            if entity_version_value is not None:
+                state["current_version"] = entity_version_value
+                context["catalog_entity_version"] = entity_version_value
+            properties_value = payload.get("properties")
+            if isinstance(properties_value, dict):
+                context["catalog_properties"] = properties_value
+                default_base_value = properties_value.get("default-base-location")
+                if default_base_value:
+                    context["default_base_location"] = default_base_value
+            storage_config_value = payload.get("storageConfigInfo") or payload.get("storage-config-info")
+            if isinstance(storage_config_value, dict):
+                context["catalog_storage_config"] = storage_config_value
+            context["catalog_update_state"] = state
+
+        return handler
+
+    if "properties" in state:
+        tests.extend(
+            [
+                HttpTest(
+                    name="Update catalog default base location",
+                    method="PUT",
+                    base="management",
+                    path_template="/catalogs/{catalog}",
+                    json_builder=make_update_body("properties"),
+                    description="Modify catalog default-base-location property.",
+                    success_codes=(200,),
+                    capture=capture_catalog_update("properties"),
+                ),
+                HttpTest(
+                    name="Revert catalog default base location",
+                    method="PUT",
+                    base="management",
+                    path_template="/catalogs/{catalog}",
+                    json_builder=make_revert_body("properties"),
+                    description="Revert catalog default-base-location to its original value.",
+                    success_codes=(200,),
+                    capture=capture_catalog_update("properties"),
+                ),
+            ]
+        )
+
+    if "storage" in state:
+        tests.extend(
+            [
+                HttpTest(
+                    name="Update catalog allowed locations",
+                    method="PUT",
+                    base="management",
+                    path_template="/catalogs/{catalog}",
+                    json_builder=make_update_body("storage"),
+                    description="Modify the first allowedLocations entry for the catalog.",
+                    success_codes=(200,),
+                    capture=capture_catalog_update("storage"),
+                ),
+                HttpTest(
+                    name="Revert catalog allowed locations",
+                    method="PUT",
+                    base="management",
+                    path_template="/catalogs/{catalog}",
+                    json_builder=make_revert_body("storage"),
+                    description="Revert catalog allowedLocations to their original values.",
+                    success_codes=(200,),
+                    capture=capture_catalog_update("storage"),
+                ),
+            ]
+        )
+
+    return tests
 
 
 def build_catalog_tests(ctx: Dict[str, Any]) -> List[HttpTest]:
@@ -833,12 +1031,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     catalog_tests = build_catalog_tests(context)
     suite.run(catalog_tests)
 
+    management_write_tests: List[HttpTest] = []
     catalog_write_tests: List[HttpTest] = []
     view_write_tests: List[HttpTest] = []
     metrics_tests: List[HttpTest] = []
     cleanup_tests: List[HttpTest] = []
 
     if args.include_writes:
+        management_write_tests = build_management_write_tests(context)
+        if management_write_tests:
+            suite.run(management_write_tests)
+
         catalog_write_tests = build_catalog_write_tests(context)
         suite.run(catalog_write_tests)
 
@@ -867,6 +1070,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     summary = suite.summarize()
     mgmt_count = len(management_tests)
     catalog_count = len(catalog_tests)
+    mgmt_write_count = len(management_write_tests)
     write_count = len(catalog_write_tests)
     view_count = len(view_write_tests)
     metrics_count = len(metrics_tests)
@@ -877,6 +1081,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     print_results("Management API", mgmt_results, args.verbose)
     print_results("Catalog API", catalog_results, args.verbose)
     cursor = mgmt_count + catalog_count
+    if management_write_tests:
+        mgmt_write_results = suite.results[cursor : cursor + mgmt_write_count]
+        print_results("Management Writes", mgmt_write_results, args.verbose)
+        cursor += mgmt_write_count
     if catalog_write_tests:
         write_results = suite.results[cursor : cursor + write_count]
         print_results("Catalog Writes", write_results, args.verbose)

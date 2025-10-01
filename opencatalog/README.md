@@ -115,6 +115,33 @@ curl https://${OC_ACCOUNT}/api/catalog/v1/open_snowflake/namespaces \
 
 curl https://${OC_ACCOUNT}/api/catalog/v1/open_snowflake/namespaces/open_snowflake \
   -H "Authorization: Bearer ${POLARIS_TOKEN}" | jq
+
+curl -sS -X PUT https://${OC_ACCOUNT}/api/management/v1/catalogs/rest_test \
+-H "Authorization: Bearer $POLARIS_TOKEN" \
+-H "Content-Type: application/json" \
+-d '{ "currentEntityVersion": 1, "properties": { "default-base-location": "abfss://resttest@sfoc.blob.core.windows.net/exemple" } }'
+
+curl -sS -X PUT https://${OC_ACCOUNT}/api/management/v1/catalogs/rest_test \
+-H "Authorization: Bearer $POLARIS_TOKEN" \
+-H "Content-Type: application/json" \
+-d '{
+  "type": "INTERNAL",
+  "name": "rest_test",
+  "properties": {
+    "default-base-location": "abfss://resttest@sfoc.blob.core.windows.net/"
+  },
+  "currentEntityVersion": 9,
+  "storageConfigInfo": {
+    "tenantId": "81652c07-f8c1-4cca-8372-9146285e400c",
+    "multiTenantAppName": "rjqd5csnowflakepacint_1753116968907",
+    "consentUrl": "https://login.microsoftonline.com/81652c07-f8c1-4cca-8372-9146285e400c/oauth2/authorize?client_id=f1742a88-b184-45c6-9feb-04fe2ddaee35&response_type=code",
+    "storageType": "AZURE",
+    "allowedLocations": [
+      "abfss://resttest@sfoc.blob.core.windows.net/",
+      "abfss://newresttest@sfocdfs.dfs.core.windows.net"
+    ]
+  }
+}'
 ```
 
 ## Troubleshooting
