@@ -111,6 +111,10 @@ engines:
           external_volume: "${SNOWFLAKE_EXTERNAL_VOLUME}"
           base_location_prefix: "${POLARIS_BASE_LOCATION_PREFIX}"
           namespace_template: "{{ namespace | upper }}"
+      unity_catalog:
+        database: "${SNOWFLAKE_DATABASE}"
+        options:
+          namespace_template: "{{ catalog.options.schema_prefix }}_{{ namespace }}_{{ run_id }}"
 
 
 datasets:
@@ -147,6 +151,7 @@ test_cases:
         unity_catalog: ../sql/spark/unity_catalog/bootstrap_namespace.sql
       snowflake:
         open_catalog: ../sql/snowflake/open_catalog/bootstrap_namespace.sql
+        unity_catalog: ../sql/snowflake/unity_catalog/bootstrap_namespace.sql
     variables:
       table_name: sales_events
 
@@ -159,6 +164,7 @@ test_cases:
         unity_catalog: ../sql/spark/unity_catalog/create_sales_events.sql
       snowflake:
         open_catalog: ../sql/snowflake/open_catalog/create_sales_events.sql
+        unity_catalog: ../sql/snowflake/unity_catalog/create_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -171,6 +177,7 @@ test_cases:
         unity_catalog: ../sql/spark/unity_catalog/bulk_insert_sales_events.sql
       snowflake:
         open_catalog: ../sql/snowflake/open_catalog/bulk_insert_sales_events.sql
+        unity_catalog: ../sql/snowflake/unity_catalog/bulk_insert_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -183,6 +190,7 @@ test_cases:
         unity_catalog: ../sql/spark/unity_catalog/read_sales_events.sql
       snowflake:
         open_catalog: ../sql/snowflake/open_catalog/read_sales_events.sql
+        unity_catalog: ../sql/snowflake/unity_catalog/read_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -195,6 +203,7 @@ test_cases:
         unity_catalog: ../sql/spark/unity_catalog/update_sales_events.sql
       snowflake:
         open_catalog: ../sql/snowflake/open_catalog/update_sales_events.sql
+        unity_catalog: ../sql/snowflake/unity_catalog/update_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -207,6 +216,7 @@ test_cases:
         unity_catalog: ../sql/spark/unity_catalog/delete_sales_events.sql
       snowflake:
         open_catalog: ../sql/snowflake/open_catalog/delete_sales_events.sql
+        unity_catalog: ../sql/snowflake/unity_catalog/delete_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -594,6 +604,92 @@ plans:
         test_case: spark_read_sales_events
         engine: snowflake
         catalog: open_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.post_delete_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: post_delete_read
+  snowflake_unity_crud:
+    name: snowflake_unity_crud
+    description: "Single-engine CRUD workflow on Snowflake Unity Catalog"
+    steps:
+      - name: bootstrap_snowflake_namespace_uc
+        test_case: bootstrap_namespace
+        engine: snowflake
+        catalog: unity_catalog
+        dataset: small_sales_events
+      - name: create_sales_events_table_sf_uc
+        test_case: create_sales_events
+        engine: snowflake
+        catalog: unity_catalog
+        dataset: small_sales_events
+      - name: insert_sales_events_sf_uc
+        test_case: bulk_insert_sales_events
+        engine: snowflake
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ dataset.rows }}"
+          - type: store_rowcount_as
+            statement_index: -2
+            name: baseline_rowcount
+      - name: read_sales_events_sf_uc
+        test_case: spark_read_sales_events
+        engine: snowflake
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.baseline_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: baseline_read
+      - name: update_sales_events_sf_uc
+        test_case: spark_update_sales_events
+        engine: snowflake
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.baseline_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: updated_row
+      - name: read_after_update_sf_uc
+        test_case: spark_read_sales_events
+        engine: snowflake
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.baseline_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: post_update_read
+      - name: delete_sales_event_sf_uc
+        test_case: spark_delete_sales_events
+        engine: snowflake
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ dataset.rows - 1 }}"
+          - type: store_rowcount_as
+            statement_index: -2
+            name: post_delete_rowcount
+      - name: read_after_delete_sf_uc
+        test_case: spark_read_sales_events
+        engine: snowflake
+        catalog: unity_catalog
         dataset: small_sales_events
         validations:
           - type: rowcount_equals
