@@ -7,11 +7,25 @@ CREATE OR REPLACE ICEBERG TABLE {{ test_case.variables.table_name }} (
   {{ column.name }} {{ column.type | upper }}{% if not loop.last %},{% endif %}
 {% endfor %}
 )
-CATALOG = '{{ engine_catalog.options.catalog_name }}'
-EXTERNAL_VOLUME = '{{ engine_catalog.options.external_volume }}'
-BASE_LOCATION = '{{ engine_catalog.options.base_location_prefix }}{{ target_namespace }}/{{ test_case.variables.table_name }}'
+{% if dataset.partition_spec %}
 PARTITION BY (
 {% for partition in dataset.partition_spec -%}
-  {{ partition.transform }}({{ partition.column }}{% if partition.get('num_buckets') %}, {{ partition.get('num_buckets') }}{% endif %}){% if not loop.last %},{% endif %}
+  {%- set transform_name = partition.transform | default('identity') | lower -%}
+  {%- if transform_name == 'days' -%}
+    {%- set expression = '  DAY(' ~ partition.column ~ ')' -%}
+  {%- elif transform_name == 'hours' -%}
+    {%- set expression = '  HOUR(' ~ partition.column ~ ')' -%}
+  {%- elif transform_name == 'months' -%}
+    {%- set expression = '  MONTH(' ~ partition.column ~ ')' -%}
+  {%- elif transform_name == 'years' -%}
+    {%- set expression = '  YEAR(' ~ partition.column ~ ')' -%}
+  {%- elif transform_name == 'bucket' and partition.get('num_buckets') -%}
+    {%- set expression = '  BUCKET(' ~ partition.get('num_buckets') ~ ', ' ~ partition.column ~ ')' -%}
+  {%- else -%}
+    {%- set expression = '  ' ~ partition.column -%}
+  {%- endif -%}
+{{ expression }}{% if not loop.last %},{% endif %}
 {% endfor %}
-);
+)
+{% endif %}
+;

@@ -97,7 +97,7 @@ engines:
     connection:
       account: "${SNOWFLAKE_ACCOUNT}"
       user: "${SNOWFLAKE_USER}"
-      password: "${SNOWFLAKE_PASSWORD}"
+      token: "${SNOWFLAKE_TOKEN}"
       role: "${SNOWFLAKE_ROLE}"
       warehouse: "${SNOWFLAKE_WAREHOUSE}"
       max_result_rows: 200
@@ -110,7 +110,7 @@ engines:
           catalog_name: "${POLARIS_CATALOG_NAME}"
           external_volume: "${SNOWFLAKE_EXTERNAL_VOLUME}"
           base_location_prefix: "${POLARIS_BASE_LOCATION_PREFIX}"
-          namespace_template: "{{ namespace | upper }}_{{ run_id }}"
+          namespace_template: "{{ namespace | upper }}"
 
 
 datasets:
@@ -145,6 +145,8 @@ test_cases:
       spark:
         open_catalog: ../sql/spark/open_catalog/bootstrap_namespace.sql
         unity_catalog: ../sql/spark/unity_catalog/bootstrap_namespace.sql
+      snowflake:
+        open_catalog: ../sql/snowflake/open_catalog/bootstrap_namespace.sql
     variables:
       table_name: sales_events
 
@@ -155,6 +157,8 @@ test_cases:
       spark:
         open_catalog: ../sql/spark/open_catalog/create_sales_events.sql
         unity_catalog: ../sql/spark/unity_catalog/create_sales_events.sql
+      snowflake:
+        open_catalog: ../sql/snowflake/open_catalog/create_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -165,36 +169,44 @@ test_cases:
       spark:
         open_catalog: ../sql/spark/open_catalog/bulk_insert_sales_events.sql
         unity_catalog: ../sql/spark/unity_catalog/bulk_insert_sales_events.sql
+      snowflake:
+        open_catalog: ../sql/snowflake/open_catalog/bulk_insert_sales_events.sql
     variables:
       table_name: sales_events
 
   spark_read_sales_events:
     name: spark_read_sales_events
-    description: "Read sales_events from Spark catalogs"
+    description: "Read sales_events from catalogs"
     scripts:
       spark:
         open_catalog: ../sql/spark/open_catalog/read_sales_events.sql
         unity_catalog: ../sql/spark/unity_catalog/read_sales_events.sql
+      snowflake:
+        open_catalog: ../sql/snowflake/open_catalog/read_sales_events.sql
     variables:
       table_name: sales_events
 
   spark_update_sales_events:
     name: spark_update_sales_events
-    description: "Update sales_events pricing with Spark"
+    description: "Update sales_events pricing"
     scripts:
       spark:
         open_catalog: ../sql/spark/open_catalog/update_sales_events.sql
         unity_catalog: ../sql/spark/unity_catalog/update_sales_events.sql
+      snowflake:
+        open_catalog: ../sql/snowflake/open_catalog/update_sales_events.sql
     variables:
       table_name: sales_events
 
   spark_delete_sales_events:
     name: spark_delete_sales_events
-    description: "Delete a sales_events record with Spark"
+    description: "Delete a sales_events record"
     scripts:
       spark:
         open_catalog: ../sql/spark/open_catalog/delete_sales_events.sql
         unity_catalog: ../sql/spark/unity_catalog/delete_sales_events.sql
+      snowflake:
+        open_catalog: ../sql/snowflake/open_catalog/delete_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -495,6 +507,93 @@ plans:
         test_case: spark_read_sales_events
         engine: spark
         catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.post_delete_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: post_delete_read
+
+  snowflake_open_crud:
+    name: snowflake_open_crud
+    description: "Single-engine CRUD workflow on Snowflake Open Catalog"
+    steps:
+      - name: bootstrap_snowflake_namespace
+        test_case: bootstrap_namespace
+        engine: snowflake
+        catalog: open_catalog
+        dataset: small_sales_events
+      - name: create_sales_events_table_sf
+        test_case: create_sales_events
+        engine: snowflake
+        catalog: open_catalog
+        dataset: small_sales_events
+      - name: insert_sales_events_sf
+        test_case: bulk_insert_sales_events
+        engine: snowflake
+        catalog: open_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ dataset.rows }}"
+          - type: store_rowcount_as
+            statement_index: -2
+            name: baseline_rowcount
+      - name: read_sales_events_sf
+        test_case: spark_read_sales_events
+        engine: snowflake
+        catalog: open_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.baseline_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: baseline_read
+      - name: update_sales_events_sf
+        test_case: spark_update_sales_events
+        engine: snowflake
+        catalog: open_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.baseline_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: updated_row
+      - name: read_after_update_sf
+        test_case: spark_read_sales_events
+        engine: snowflake
+        catalog: open_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.baseline_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: post_update_read
+      - name: delete_sales_event_sf
+        test_case: spark_delete_sales_events
+        engine: snowflake
+        catalog: open_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ dataset.rows - 1 }}"
+          - type: store_rowcount_as
+            statement_index: -2
+            name: post_delete_rowcount
+      - name: read_after_delete_sf
+        test_case: spark_read_sales_events
+        engine: snowflake
+        catalog: open_catalog
         dataset: small_sales_events
         validations:
           - type: rowcount_equals

@@ -7,7 +7,7 @@ SELECT
   SUM(price * qty) AS revenue
 FROM {{ test_case.variables.table_name }};
 
-SELECT snapshot_id, committed_at
-FROM {{ test_case.variables.table_name }}$snapshots
-ORDER BY committed_at DESC
-LIMIT 2;
+-- Snowflake Open Catalog Iceberg tables do not currently expose a public snapshots view.
+-- Emit placeholder values so downstream validations keep the same statement indexes.
+SELECT NULL::VARCHAR AS snapshot_id,
+       CURRENT_TIMESTAMP() AS committed_at;

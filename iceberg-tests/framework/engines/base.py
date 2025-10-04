@@ -62,6 +62,12 @@ class EngineAdapter:
     def run(self, step_name: str, sql_path: str, variables: Dict[str, Any]) -> ExecutionResult:
         statements = self.render_statements(sql_path, variables)
         logger.debug("[%s] Executing %d statements from %s", self.name, len(statements), sql_path)
+        for index, statement in enumerate(statements, 1):
+            log_message = "[%s] Statement %d:\n%s"
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(log_message, self.name, index, statement)
+            else:
+                logger.info(log_message, self.name, index, statement)
         results = self.execute(statements)
         return ExecutionResult(step_name=step_name, statements=results)
 

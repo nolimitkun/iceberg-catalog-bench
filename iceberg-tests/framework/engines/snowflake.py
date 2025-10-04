@@ -15,11 +15,25 @@ class SnowflakeEngineAdapter(EngineAdapter):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         connection = dict(self.engine_config.connection)
+        for key, value in list(connection.items()):
+            if isinstance(value, str) and not value:
+                connection.pop(key)
         if self.catalog_override.database and "database" not in connection:
             connection["database"] = self.catalog_override.database
         if self.catalog_override.schema_name and "schema" not in connection:
             connection["schema"] = self.catalog_override.schema_name
         connection.setdefault("client_session_keep_alive", True)
+
+        token = connection.get("token")
+        if token:
+            if token.startswith("${") or token == "your_personal_access_token":
+                raise RuntimeError(
+                    "SNOWFLAKE_TOKEN is not set to a real programmatic access token. "
+                    "Update your environment/.env with a valid PAT."
+                )
+            logger.debug("[snowflake] Using personal access token authentication")
+            connection.setdefault("authenticator", "PROGRAMMATIC_ACCESS_TOKEN")
+            connection.pop("password", None)
 
         key_path = connection.pop("private_key_path", None)
         key_pass = connection.pop("private_key_passphrase", None)
