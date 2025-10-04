@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from databricks import sql
 
@@ -49,8 +49,7 @@ class DatabricksEngineAdapter(EngineAdapter):
                 description = cursor.description
                 if description:
                     columns = [col[0] for col in description]
-                    fetched = cursor.fetchmany(self.max_result_rows)
-                    rows = [dict(zip(columns, row)) for row in fetched]
+                    rows = self._fetch_rows(cursor, columns)
                 else:
                     rows = None
                 rowcount = cursor.rowcount if cursor.rowcount >= 0 else None
@@ -58,6 +57,22 @@ class DatabricksEngineAdapter(EngineAdapter):
         finally:
             cursor.close()
         return results
+
+    def _fetch_rows(self, cursor, columns: List[str]) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        while True:
+            table = cursor.fetchmany_arrow(self.max_result_rows)
+            if not table or table.num_rows == 0:
+                break
+            records = table.to_pylist()
+            for record in records:
+                if isinstance(record, dict):
+                    rows.append({col: record.get(col) for col in columns})
+                else:
+                    rows.append({col: record[index] if index < len(record) else None for index, col in enumerate(columns)})
+            if table.num_rows < self.max_result_rows:
+                break
+        return rows
 
     def close(self) -> None:
         logger.info("[databricks] Closing connection")

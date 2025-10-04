@@ -91,21 +91,31 @@ def _derive_rowcount(statement: StatementResult) -> int | None:
         if isinstance(first_row, dict):
             for key in ("row_count", "count", "count(1)", "count(*)"):
                 if key in first_row:
+                    value = first_row[key]
+                    if value is None:
+                        continue
                     try:
-                        return int(first_row[key])
+                        return int(value)
                     except (TypeError, ValueError):
                         pass
             if len(first_row) == 1:
                 try:
-                    return int(next(iter(first_row.values())))
-                except (StopIteration, TypeError, ValueError):
-                    pass
+                    value = next(iter(first_row.values()))
+                except StopIteration:
+                    value = None
+                if value is not None:
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        pass
         elif isinstance(first_row, (list, tuple)):
             if first_row:
-                try:
-                    return int(first_row[0])
-                except (TypeError, ValueError):
-                    pass
+                value = first_row[0]
+                if value is not None:
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        pass
     if statement.rowcount is not None:
         try:
             return int(statement.rowcount)
