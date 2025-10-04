@@ -56,12 +56,21 @@ engines:
           namespace_template: "{{ catalog.options.namespace_root }}.{{ namespace }}_{{ run_id }}"
       unity_catalog:
         session_conf:
-          spark.sql.defaultCatalog: interop_uc
-          spark.sql.catalog.interop_uc: org.apache.iceberg.spark.SparkCatalog
-          spark.sql.catalog.interop_uc.type: hive
-          spark.sql.catalog.interop_uc.warehouse: "${UNITY_WAREHOUSE_LOCATION}"
+          spark.sql.defaultCatalog: interopuc
+          spark.sql.catalog.interopuc: org.apache.iceberg.spark.SparkCatalog
+          spark.sql.catalog.interopuc.type: rest
+          spark.sql.catalog.interopuc.uri: "${UC_REST_URI}"
+          spark.sql.catalog.interopuc.warehouse: "${UC_WAREHOUSE_URI}"
+          spark.sql.catalog.interopuc.header.X-Iceberg-Access-Delegation: "vended-credentials"
+          #spark.sql.catalog.interopuc.rest.auth.type: "oauth2"
+          #spark.sql.catalog.interopuc.oauth2-server-uri: "${UC_OAUTH2_SERVER_URI}"
+          #spark.sql.catalog.interopuc.credential: "${UC_PRINCIPAL_ID}:${UC_PRINCIPAL_SECRET}"
+          #spark.sql.catalog.interopuc.scope: "${UC_SCOPE}"
+          spark.sql.catalog.interopuc.header.Authorization: "Bearer ${UC_TOKEN}"
+          spark.driver.extraJavaOptions: "-Djava.security.manager=allow"
+          spark.executor.extraJavaOptions: "-Djava.security.manager=allow"
         options:
-          catalog_name: "interop_uc"
+          catalog_name: "interopuc"
           namespace_template: "{{ catalog.options.schema_prefix }}_{{ namespace }}_{{ run_id }}"
 
   databricks:
@@ -135,7 +144,7 @@ test_cases:
     scripts:
       spark:
         open_catalog: ../sql/spark/open_catalog/bootstrap_namespace.sql
-        #unity_catalog: ../sql/spark/unity_catalog/bootstrap_namespace.sql
+        unity_catalog: ../sql/spark/unity_catalog/bootstrap_namespace.sql
     variables:
       table_name: sales_events
 
@@ -145,7 +154,7 @@ test_cases:
     scripts:
       spark:
         open_catalog: ../sql/spark/open_catalog/create_sales_events.sql
-        #unity_catalog: ../sql/spark/unity_catalog/create_sales_events.sql
+        unity_catalog: ../sql/spark/unity_catalog/create_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -155,16 +164,17 @@ test_cases:
     scripts:
       spark:
         open_catalog: ../sql/spark/open_catalog/bulk_insert_sales_events.sql
-        #unity_catalog: ../sql/spark/unity_catalog/bulk_insert_sales_events.sql
+        unity_catalog: ../sql/spark/unity_catalog/bulk_insert_sales_events.sql
     variables:
       table_name: sales_events
 
   spark_read_sales_events:
     name: spark_read_sales_events
-    description: "Read sales_events from Spark Open Catalog"
+    description: "Read sales_events from Spark catalogs"
     scripts:
       spark:
         open_catalog: ../sql/spark/open_catalog/read_sales_events.sql
+        unity_catalog: ../sql/spark/unity_catalog/read_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -174,6 +184,7 @@ test_cases:
     scripts:
       spark:
         open_catalog: ../sql/spark/open_catalog/update_sales_events.sql
+        unity_catalog: ../sql/spark/unity_catalog/update_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -183,6 +194,7 @@ test_cases:
     scripts:
       spark:
         open_catalog: ../sql/spark/open_catalog/delete_sales_events.sql
+        unity_catalog: ../sql/spark/unity_catalog/delete_sales_events.sql
     variables:
       table_name: sales_events
 
@@ -404,6 +416,93 @@ plans:
           - type: store_rows_as
             statement_index: -1
             name: post_delete_read
+
+  spark_unity_crud:
+    name: spark_unity_crud
+    description: "Single-engine CRUD workflow on Spark Unity Catalog"
+    steps:
+      - name: bootstrap_unity_namespace
+        test_case: bootstrap_namespace
+        engine: spark
+        catalog: unity_catalog
+        dataset: small_sales_events
+      - name: create_sales_events_table
+        test_case: create_sales_events
+        engine: spark
+        catalog: unity_catalog
+        dataset: small_sales_events
+      - name: insert_sales_events
+        test_case: bulk_insert_sales_events
+        engine: spark
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ dataset.rows }}"
+          - type: store_rowcount_as
+            statement_index: -2
+            name: baseline_rowcount
+      - name: read_sales_events
+        test_case: spark_read_sales_events
+        engine: spark
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.baseline_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: baseline_read
+      - name: update_sales_events
+        test_case: spark_update_sales_events
+        engine: spark
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.baseline_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: updated_row
+      - name: read_after_update
+        test_case: spark_read_sales_events
+        engine: spark
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.baseline_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: post_update_read
+      - name: delete_sales_event
+        test_case: spark_delete_sales_events
+        engine: spark
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ dataset.rows - 1 }}"
+          - type: store_rowcount_as
+            statement_index: -2
+            name: post_delete_rowcount
+      - name: read_after_delete
+        test_case: spark_read_sales_events
+        engine: spark
+        catalog: unity_catalog
+        dataset: small_sales_events
+        validations:
+          - type: rowcount_equals
+            statement_index: -2
+            expected: "{{ state.post_delete_rowcount }}"
+          - type: store_rows_as
+            statement_index: -1
+            name: post_delete_read
   create_sales_events_only:
     name: create_sales_events_only
     steps:
@@ -412,4 +511,3 @@ plans:
         engine: spark
         catalog: open_catalog
         dataset: small_sales_events
-
