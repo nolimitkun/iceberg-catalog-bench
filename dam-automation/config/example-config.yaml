@@ -1,0 +1,44 @@
+azure:
+  subscription_id: "209fc691-09cb-4574-b5ae-63a1542a70df"
+  tenant_id: "81652c07-f8c1-4cca-8372-9146285e400c"
+  client_id: "94759322-d604-44c6-8aa2-956bc76fa5d5"
+  client_secret: "xxxxx"
+  resource_group: "datalake"
+  storage_account: "damautomation"
+  location: "westeurope"
+  identity_resource_group: "dam"
+  data_plane_dns_suffix: "dfs.core.windows.net"
+
+
+databricks:
+  account_id: "adef0571-9b5b-4631-b956-5d02af5b38fa"
+  workspace_url: "https://adb-733469256132524.4.azuredatabricks.net"
+  account_url: "https://accounts.azuredatabricks.net"  # Must be the Databricks accounts domain
+  workspace_client_id: "8fe7c0e5-a0a0-4ea0-8f47-5d6cbc744992"
+  workspace_client_secret: "xxxxx"
+  workspace_oauth_scopes:
+    - "all-apis"
+  account_client_id: "8fe7c0e5-a0a0-4ea0-8f47-5d6cbc744992"
+  account_client_secret: "xxxxxxx"
+  account_oauth_scopes:
+    - "all-apis"
+  metastore_id: "8e401676-d0f2-4dce-a6af-40fa0122d1a2"
+  storage_root: "abfss://root@stlakehouse.dfs.core.windows.net"
+  access_connector_id: "/subscriptions/209fc691-09cb-4574-b5ae-63a1542a70df/resourceGroups/feeder1-rg/providers/Microsoft.Databricks/accessConnectors/external-storage"
+  # The automation will inject the user-assigned managed identity ID into the Unity Catalog storage credential
+
+identity:
+  graph_url: "https://graph.microsoft.com"
+  client_id: "94759322-d604-44c6-8aa2-956bc76fa5d5"
+  client_secret: "xxxxx"
+  tenant_id: "81652c07-f8c1-4cca-8372-9146285e400c"
+  app_roles:
+    - "CatalogAdmin"
+
+state:
+  type: "filesystem"
+  path: "./state"
+
+naming:
+  prefix: "dam"
+  separator: ""

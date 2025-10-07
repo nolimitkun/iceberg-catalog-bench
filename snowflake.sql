@@ -356,4 +356,54 @@ use database CATALOG_LINKED_DB;
 use catalog_linked_db;
 
 
+SELECT * FROM catalog_linked_table AT(TIMESTAMP => CAST('2025-09-29 18:36:00' AS TIMESTAMP_LTZ));
 
+SELECT * FROM catalog_linked_table AT(OFFSET => -60*1800);
+
+
+SELECT *
+  FROM TABLE(
+    INFORMATION_SCHEMA.ICEBERG_TABLE_FILES(
+      TABLE_NAME => 'catalog_linked_table',
+      AT => CAST('2025-09-30 15:36:00' AS TIMESTAMP_LTZ)
+    )
+  );
+select * from catalog_linked_table;
+
+INSERT INTO catalog_linked_table VALUES ('lily', 'bai', 200, '2025-08-12');
+  
+SELECT *
+  FROM TABLE(INFORMATION_SCHEMA.ICEBERG_TABLE_SNAPSHOT_REFRESH_HISTORY(
+    TABLE_NAME => 'catalog_linked_table'
+  ));
+
+--093678 (0A000): SQL Compilation Error: This operation is not supported in a catalog-linked database.
+CREATE SNAPSHOT POLICY hourly_snapshot_policy
+  SCHEDULE = '60 MINUTE'
+  EXPIRE_AFTER_DAYS = 90
+  COMMENT = 'Hourly backups expire after 90 days';
+  
+--093678 (0A000): SQL Compilation Error: This operation is not supported in a catalog-linked database.
+CREATE SNAPSHOT SET t1_snapshots FOR TABLE catalog_linked_table;
+ALTER SNAPSHOT SET t1_snapshots ADD SNAPSHOT;
+
+ALTER ICEBERG TABLE catalog_linked_table REFRESH;
+
+ALTER ICEBERG TABLE catalog_linked_table ADD COLUMN mail STRING comment 'e-mail' ;
+INSERT INTO catalog_linked_table VALUES ('kiki', 'liu', 500, '2025-12-05','kiki.liu@mail.com');
+
+  
+
+select * from catalog_linked_table;
+
+UPDATE catalog_linked_table
+  SET  amount = 400
+  WHERE first_name = 'kun';
+
+select * from catalog_linked_table_partition;
+
+MERGE INTO catalog_linked_table_partition
+  USING catalog_linked_table
+  ON catalog_linked_table_partition.first_name = catalog_linked_table.first_name
+  WHEN MATCHED THEN
+  UPDATE SET catalog_linked_table_partition.amount = catalog_linked_table.amount;
