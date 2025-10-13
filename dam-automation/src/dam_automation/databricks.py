@@ -85,6 +85,14 @@ class AccountServicePrincipal:
     display_name: str
 
 
+@dataclass(slots=True)
+class ServicePrincipalSecret:
+    client_id: str
+    secret_id: str
+    secret_value: str
+    secret_name: str
+
+
 class DatabricksProvisioner:
     """Performs workspace- and account-level operations in Databricks."""
 
@@ -165,7 +173,48 @@ class DatabricksProvisioner:
             return None
         return resources[0]
 
+    def get_account_service_principal(self, application_id: str) -> Optional[AccountServicePrincipal]:
+        return self._find_account_service_principal(application_id)
+
+    def get_workspace_service_principal(self, application_id: str) -> Optional[Dict[str, Any]]:
+        query = f'applicationId eq "{application_id}"'
+        response = self._workspace_request(
+            "GET",
+            "/api/2.0/preview/scim/v2/ServicePrincipals",
+            params={"filter": query},
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = parse_json(response)
+        resources = payload.get("Resources", [])
+        for sp in resources:
+            if sp.get("applicationId") == application_id or sp.get("appId") == application_id:
+                return sp
+        return None
+
+    def get_account_group(self, name: str) -> Optional[Dict[str, Any]]:
+        return self._find_account_group(name)
+
     # Workspace-level ---------------------------------------------------
+
+    def _paginate_workspace(self, path: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+        next_page_token: Optional[str] = None
+        while True:
+            query = dict(params or {})
+            if next_page_token:
+                query["page_token"] = next_page_token
+            response = self._workspace_request("GET", path, params=query)
+            response.raise_for_status()
+            payload = parse_json(response)
+            items = payload.get("schemas") or payload.get("tables") or payload.get("items") or []
+            if isinstance(items, list):
+                results.extend(items)
+            next_page_token = payload.get("next_page_token")
+            if not next_page_token:
+                break
+        return results
 
     def ensure_storage_credential(self, name: str, managed_identity_id: str) -> StorageCredential:
         payload = {
@@ -205,24 +254,51 @@ class DatabricksProvisioner:
             "read_only": False,
             "comment": "Provisioned by DAM automation",
         }
-        response = self._workspace_request("POST", "/api/2.1/unity-catalog/external-locations", json=payload)
-        if response.status_code == 409:
-            logger.info("External location '%s' already exists", name)
-            return ExternalLocation(name=name, url=url)
-        if response.status_code >= 400:
-            body: Any
-            try:
-                body = response.json()
-            except ValueError:
-                body = response.text
-            if isinstance(body, dict) and body.get("error_code") == "EXTERNAL_LOCATION_ALREADY_EXISTS":
-                logger.info("External location '%s' already exists (reported via error payload)", name)
+        max_attempts = 5
+        for attempt in range(1, max_attempts + 1):
+            response = self._workspace_request("POST", "/api/2.1/unity-catalog/external-locations", json=payload)
+            if response.status_code == 409:
+                logger.info("External location '%s' already exists", name)
                 return ExternalLocation(name=name, url=url)
-            raise RuntimeError(
-                "Failed to create external location: "
-                f"status={response.status_code}, body={body}"
-            )
-        return ExternalLocation(name=name, url=url)
+            if response.status_code >= 400:
+                body: Any
+                try:
+                    body = response.json()
+                except ValueError:
+                    body = response.text
+                if isinstance(body, dict) and body.get("error_code") == "EXTERNAL_LOCATION_ALREADY_EXISTS":
+                    logger.info("External location '%s' already exists (reported via error payload)", name)
+                    return ExternalLocation(name=name, url=url)
+                if response.status_code == 403 and self._should_retry_external_location(body) and attempt < max_attempts:
+                    backoff = min(60, 5 * attempt)
+                    logger.info(
+                        "External location creation for '%s' denied (permissions not yet propagated). Retrying in %s seconds.",
+                        name,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                    continue
+                raise RuntimeError(
+                    "Failed to create external location: "
+                    f"status={response.status_code}, body={body}"
+                )
+            return ExternalLocation(name=name, url=url)
+        raise RuntimeError(
+            f"Failed to create external location '{name}' after {max_attempts} attempts due to permission propagation delays."
+        )
+
+    @staticmethod
+    def _should_retry_external_location(body: Any) -> bool:
+        if not isinstance(body, dict):
+            return False
+        message = str(body.get("message", "")).lower()
+        if "not authorized" in message:
+            return True
+        if "managed identity does not have" in message:
+            return True
+        if "validate_credential" in message:
+            return True
+        return False
 
     def ensure_catalog(self, name: str, storage_root: str) -> Catalog:
         payload = {
@@ -254,21 +330,29 @@ class DatabricksProvisioner:
             storage_root=body.get("storage_root", storage_root),
         )
 
-    def ensure_group(self, name: str) -> Dict[str, Any]:
-        existing = self._find_account_group(name)
+    def ensure_group(self, base_name: str) -> Dict[str, Dict[str, Any]]:
+        """Ensure paired read-only and read-write account groups exist."""
+        ro_name = f"{base_name}-ro"
+        rw_name = f"{base_name}-rw"
+        ro_group = self._ensure_or_create_account_group(ro_name)
+        rw_group = self._ensure_or_create_account_group(rw_name)
+        return {"ro": ro_group, "rw": rw_group}
+
+    def _ensure_or_create_account_group(self, display_name: str) -> Dict[str, Any]:
+        existing = self._find_account_group(display_name)
         if existing:
-            logger.info("Databricks account group '%s' already exists", name)
+            logger.info("Databricks account group '%s' already exists", display_name)
             return existing
 
-        payload = {"displayName": name}
+        payload = {"displayName": display_name}
         response = self._account_request(
             "POST",
             f"/api/2.0/accounts/{self._config.account_id}/scim/v2/Groups",
             json=payload,
         )
         if response.status_code == 409:
-            logger.info("Databricks account group '%s' already exists", name)
-            existing = self._find_account_group(name)
+            logger.info("Databricks account group '%s' already exists", display_name)
+            existing = self._find_account_group(display_name)
             if existing:
                 return existing
         response.raise_for_status()
@@ -299,6 +383,69 @@ class DatabricksProvisioner:
             logger.info("Service principal already in Databricks account group '%s'", group_id)
             return
         response.raise_for_status()
+
+    def remove_service_principal_from_group(self, group_id: str, service_principal_id: str) -> bool:
+        payload = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [
+                {
+                    "op": "Remove",
+                    "path": f'members[value eq "{service_principal_id}"]',
+                }
+            ],
+        }
+        response = self._account_request(
+            "PATCH",
+            f"/api/2.0/accounts/{self._config.account_id}/scim/v2/Groups/{group_id}",
+            json=payload,
+        )
+        if response.status_code in {200, 204}:
+            return True
+        if response.status_code == 404:
+            logger.info("Databricks account group '%s' not found when removing membership", group_id)
+            return False
+        if response.status_code == 400 and "not found" in response.text.lower():
+            logger.info(
+                "Service principal '%s' not a member of group '%s'; nothing to remove",
+                service_principal_id,
+                group_id,
+            )
+            return False
+        response.raise_for_status()
+        return True
+
+    def ensure_workspace_service_principal(self, application_id: str, display_name: str) -> Dict[str, Any]:
+        """Ensure the service principal is available within the Databricks workspace."""
+        query = f'applicationId eq "{application_id}"'
+        response = self._workspace_request(
+            "GET",
+            "/api/2.0/preview/scim/v2/ServicePrincipals",
+            params={"filter": query},
+        )
+        response.raise_for_status()
+        payload = parse_json(response)
+        resources = payload.get("Resources", [])
+        for sp in resources:
+            if sp.get("applicationId") == application_id or sp.get("appId") == application_id:
+                logger.info("Databricks workspace service principal '%s' already exists", display_name)
+                return sp
+
+        logger.info("Creating Databricks workspace service principal '%s'", display_name)
+        create_payload = {
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:ServicePrincipal"],
+            "displayName": display_name,
+            "applicationId": application_id,
+        }
+        create_resp = self._workspace_request(
+            "POST",
+            "/api/2.0/preview/scim/v2/ServicePrincipals",
+            json=create_payload,
+        )
+        if create_resp.status_code == 409:
+            logger.info("Workspace service principal '%s' already exists (reported via conflict)", display_name)
+            return self.ensure_workspace_service_principal(application_id, display_name)
+        create_resp.raise_for_status()
+        return parse_json(create_resp)
 
     def grant_catalog_privileges(self, catalog_name: str, principal: str, privileges: List[str]) -> None:
         payload = {
@@ -342,6 +489,170 @@ class DatabricksProvisioner:
             ],
         )
 
+    def delete_account_group(self, display_name: str) -> bool:
+        group = self._find_account_group(display_name)
+        if not group:
+            logger.info("Databricks account group '%s' not found; skipping delete", display_name)
+            return False
+        group_id = group.get("id")
+        if not group_id:
+            return False
+        response = self._account_request(
+            "DELETE",
+            f"/api/2.0/accounts/{self._config.account_id}/scim/v2/Groups/{group_id}",
+        )
+        if response.status_code in {200, 204}:
+            logger.info("Deleted Databricks account group '%s'", display_name)
+            return True
+        if response.status_code == 404:
+            logger.info("Databricks account group '%s' not found during delete", display_name)
+            return False
+        if response.status_code == 400:
+            try:
+                body = response.json()
+            except ValueError:
+                body = response.text
+            logger.warning(
+                "Databricks reported 400 while deleting catalog '%s': %s",
+                name,
+                body,
+            )
+            return False
+        response.raise_for_status()
+        return False
+
+    def delete_storage_credential(self, name: str) -> bool:
+        response = self._workspace_request("DELETE", f"/api/2.1/unity-catalog/credentials/{name}")
+        if response.status_code in {200, 202, 204}:
+            logger.info("Deleted storage credential '%s'", name)
+            return True
+        if response.status_code == 404:
+            logger.info("Storage credential '%s' not found; skipping delete", name)
+            return False
+        response.raise_for_status()
+        return False
+
+    def delete_external_location(self, name: str) -> bool:
+        response = self._workspace_request(
+            "DELETE",
+            f"/api/2.1/unity-catalog/external-locations/{name}",
+            params={"force": "true"},
+        )
+        if response.status_code in {200, 202, 204}:
+            logger.info("Deleted external location '%s'", name)
+            return True
+        if response.status_code == 404:
+            logger.info("External location '%s' not found; skipping delete", name)
+            return False
+        response.raise_for_status()
+        return False
+
+    def delete_catalog(self, name: str) -> bool:
+        response = self._workspace_request("DELETE", f"/api/2.1/unity-catalog/catalogs/{name}")
+        if response.status_code in {200, 202, 204}:
+            logger.info("Deleted catalog '%s'", name)
+            return True
+        if response.status_code == 404:
+            logger.info("Catalog '%s' not found; skipping delete", name)
+            return False
+        body: Any
+        try:
+            body = response.json()
+        except ValueError:
+            body = response.text
+        if isinstance(body, dict):
+            error_code = body.get("error_code")
+            if error_code in {"CATALOG_DOES_NOT_EXIST", "NOT_FOUND"}:
+                logger.info("Catalog '%s' already absent (error_code=%s)", name, error_code)
+                return False
+            message = body.get("message", "")
+            if error_code == "INVALID_STATE" and "already deleted" in message.lower():
+                logger.info("Catalog '%s' already deleted (Databricks reported INVALID_STATE)", name)
+                return False
+        response.raise_for_status()
+        return False
+
+    def list_schemas(self, catalog_name: str) -> List[Dict[str, Any]]:
+        params = {"catalog_name": catalog_name}
+        return self._paginate_workspace("/api/2.1/unity-catalog/schemas", params=params)
+
+    def list_tables(self, catalog_name: str, schema_name: str) -> List[Dict[str, Any]]:
+        params = {"catalog_name": catalog_name, "schema_name": schema_name}
+        return self._paginate_workspace("/api/2.1/unity-catalog/tables", params=params)
+
+    def delete_table(self, full_name: str) -> bool:
+        response = self._workspace_request("DELETE", f"/api/2.1/unity-catalog/tables/{full_name}")
+        if response.status_code in {200, 202, 204}:
+            logger.info("Deleted table '%s'", full_name)
+            return True
+        if response.status_code == 404:
+            logger.info("Table '%s' not found; skipping delete", full_name)
+            return False
+        body: Any
+        try:
+            body = response.json()
+        except ValueError:
+            body = response.text
+        logger.warning("Failed to delete table '%s': %s", full_name, body)
+        response.raise_for_status()
+        return False
+
+    def delete_schema(self, full_name: str) -> bool:
+        response = self._workspace_request("DELETE", f"/api/2.1/unity-catalog/schemas/{full_name}")
+        if response.status_code in {200, 202, 204}:
+            logger.info("Deleted schema '%s'", full_name)
+            return True
+        if response.status_code == 404:
+            logger.info("Schema '%s' not found; skipping delete", full_name)
+            return False
+        body: Any
+        try:
+            body = response.json()
+        except ValueError:
+            body = response.text
+        logger.warning("Failed to delete schema '%s': %s", full_name, body)
+        response.raise_for_status()
+        return False
+
+    def delete_account_service_principal(self, application_id: str) -> bool:
+        service_principal = self._find_account_service_principal(application_id)
+        if not service_principal:
+            logger.info("Databricks account service principal '%s' not found; skipping delete", application_id)
+            return False
+        response = self._account_request(
+            "DELETE",
+            f"/api/2.0/accounts/{self._config.account_id}/scim/v2/ServicePrincipals/{service_principal.id}",
+        )
+        if response.status_code in {200, 204}:
+            logger.info("Deleted Databricks account service principal '%s'", application_id)
+            return True
+        if response.status_code == 404:
+            logger.info("Databricks account service principal '%s' not found during delete", application_id)
+            return False
+        response.raise_for_status()
+        return False
+
+    def delete_workspace_service_principal(self, application_id: str) -> bool:
+        service_principal = self.get_workspace_service_principal(application_id)
+        if not service_principal:
+            logger.info("Databricks workspace service principal '%s' not found; skipping delete", application_id)
+            return False
+        resource_id = service_principal.get("id")
+        if not resource_id:
+            return False
+        response = self._workspace_request(
+            "DELETE",
+            f"/api/2.0/preview/scim/v2/ServicePrincipals/{resource_id}",
+        )
+        if response.status_code in {200, 204}:
+            logger.info("Deleted Databricks workspace service principal '%s'", application_id)
+            return True
+        if response.status_code == 404:
+            logger.info("Databricks workspace service principal '%s' not found during delete", application_id)
+            return False
+        response.raise_for_status()
+        return False
+
     def grant_external_location_privileges(self, location_name: str, principal: str, privileges: List[str]) -> None:
         payload = {
             "changes": [
@@ -383,6 +694,67 @@ class DatabricksProvisioner:
                 "Failed to grant external location privileges: "
                 f"status={response.status_code}, body={body}"
             )
+
+    def create_service_principal_secret(
+        self,
+        service_principal_id: str,
+        *,
+        secret_name: str,
+    ) -> ServicePrincipalSecret:
+        if self._service_principal_secret_exists(service_principal_id, secret_name):
+            raise RuntimeError(
+                f"Databricks service principal '{service_principal_id}' already has a secret named '{secret_name}'."
+            )
+
+        payload = {"secret_name": secret_name}
+        response = self._account_request(
+            "POST",
+            f"/api/2.0/accounts/{self._config.account_id}/servicePrincipals/{service_principal_id}/credentials/secrets",
+            json=payload,
+        )
+        if response.status_code >= 400:
+            try:
+                body = response.json()
+            except ValueError:
+                body = response.text
+            raise RuntimeError(
+                "Failed to create Databricks OAuth secret: "
+                f"status={response.status_code}, body={body}"
+            )
+        payload = parse_json(response)
+        secret_value = payload.get("secret_value") or payload.get("secret")
+        if not secret_value:
+            raise RuntimeError(
+                "Databricks API did not return an OAuth client secret when creating service principal secret."
+            )
+        secret = ServicePrincipalSecret(
+            client_id=service_principal_id,
+            secret_id=str(payload.get("secret_id", "")),
+            secret_value=secret_value,
+            secret_name=secret_name,
+        )
+        logger.info(
+            "Created Databricks OAuth secret '%s' (name='%s') for service principal '%s'",
+            secret.secret_id or "<unknown>",
+            secret_name,
+            service_principal_id,
+        )
+        return secret
+
+    def _service_principal_secret_exists(self, service_principal_id: str, secret_name: str) -> bool:
+        response = self._account_request(
+            "GET",
+            f"/api/2.0/accounts/{self._config.account_id}/servicePrincipals/{service_principal_id}/credentials/secrets",
+        )
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        payload = parse_json(response)
+        secrets = payload.get("secrets") or payload.get("items") or []
+        for item in secrets:
+            if str(item.get("secret_name")) == secret_name:
+                return True
+        return False
 
     # HTTP helpers ------------------------------------------------------
 

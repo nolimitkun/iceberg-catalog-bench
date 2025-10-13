@@ -36,6 +36,11 @@ def _json_to_record(data: dict) -> DatasourceRecord:
         catalog_name=resources_payload["catalog_name"],
         group_name=resources_payload["group_name"],
         service_principal_app_id=resources_payload["service_principal_app_id"],
+        service_principal_client_secret=resources_payload.get("service_principal_client_secret", ""),
+        databricks_oauth_client_secret=resources_payload.get("databricks_oauth_client_secret", ""),
+        snowflake_external_volume_name=resources_payload.get("snowflake_external_volume_name", ""),
+        snowflake_catalog_integration_name=resources_payload.get("snowflake_catalog_integration_name", ""),
+        snowflake_database_name=resources_payload.get("snowflake_database_name", ""),
         created_at=_deserialize_datetime(resources_payload["created_at"]),
     )
     request_payload = data["request"]
@@ -76,6 +81,14 @@ class StateStore:
         with self._lock:
             payload = _record_to_json(record)
             path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+    def delete(self, datasource_name: str) -> bool:
+        path = self._path_for(datasource_name)
+        with self._lock:
+            if not path.exists():
+                return False
+            path.unlink()
+            return True
 
     def exists(self, datasource_name: str) -> bool:
         return self._path_for(datasource_name).exists()

@@ -27,6 +27,11 @@ class DatasourceResources:
     catalog_name: str
     group_name: str
     service_principal_app_id: str
+    service_principal_client_secret: str
+    databricks_oauth_client_secret: str
+    snowflake_external_volume_name: str
+    snowflake_catalog_integration_name: str
+    snowflake_database_name: str
     created_at: datetime = field(default_factory=lambda: datetime.utcnow())
 
 
@@ -49,3 +54,26 @@ class DatasourceRecord:
         self.status = "succeeded"
         self.last_error = None
         self.updated_at = datetime.utcnow()
+
+
+@dataclass(slots=True)
+class DeletionOutcome:
+    """Result details for a subsystem deletion attempt."""
+
+    succeeded: bool
+    message: Optional[str] = None
+
+
+@dataclass(slots=True)
+class DatasourceDeletionResult:
+    """Outcome of deleting a datasource across all managed systems."""
+
+    input_name: str
+    normalized_name: str
+    state_record_name: str
+    state_deleted: bool
+    state_found: bool
+    azure: DeletionOutcome
+    identity: DeletionOutcome
+    databricks: DeletionOutcome
+    snowflake: DeletionOutcome

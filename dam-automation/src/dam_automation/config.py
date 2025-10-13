@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import yaml
 from pydantic import BaseModel, Field, validator
 from pydantic import model_validator
+from pydantic import ConfigDict
 
 
 class AzureConfig(BaseModel):
@@ -118,6 +119,54 @@ class IdentityConfig(BaseModel):
     app_roles: list[str] = Field(default_factory=list)
 
 
+class SnowflakeConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    account: str = Field(
+        description="Snowflake account identifier (e.g. xy12345 or xy12345.us-east-1)"
+    )
+    user: str = Field(description="Snowflake user with privileges to manage external volumes and catalog integrations")
+    password: str = Field(description="Password for the Snowflake user")
+    role: str = Field(description="Default role to use when connecting")
+    warehouse: Optional[str] = Field(
+        default=None,
+        description="Warehouse to resume for executing DDL (optional)",
+    )
+    database: Optional[str] = Field(
+        default=None,
+        description="Default database context (optional)",
+    )
+    default_schema: Optional[str] = Field(
+        default=None,
+        description="Default schema context (optional)",
+        alias="schema",
+    )
+    oauth_allowed_scopes: list[str] = Field(
+        default_factory=lambda: ["PRINCIPAL_ROLE:snowflake"],
+        description="Scopes requested when Snowflake fetches OAuth tokens for the catalog integration",
+    )
+    namespace_mode: str = Field(
+        default="FLATTEN_NESTED_NAMESPACE",
+        description="Namespace handling strategy for catalog linked databases",
+    )
+    namespace_flatten_delimiter: str = Field(
+        default="-",
+        description="Delimiter used when flattening nested namespaces",
+    )
+    access_delegation_mode: str = Field(
+        default="EXTERNAL_VOLUME_CREDENTIALS",
+        description="Delegation mode for catalog integrations",
+    )
+    catalog_source: str = Field(
+        default="ICEBERG_REST",
+        description="Snowflake catalog source value for integrations",
+    )
+    table_format: str = Field(
+        default="ICEBERG",
+        description="Table format advertised to Snowflake",
+    )
+
+
 class StateConfig(BaseModel):
     type: str = Field("filesystem", description="Type of state backend")
     path: str = Field("./state", description="Filesystem path for state persistence")
@@ -139,6 +188,7 @@ class AutomationConfig(BaseModel):
     databricks: DatabricksConfig
     identity: IdentityConfig
     state: StateConfig
+    snowflake: SnowflakeConfig
     naming: NamingConfig = Field(default_factory=NamingConfig)
 
     @classmethod

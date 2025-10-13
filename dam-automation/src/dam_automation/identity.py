@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 import requests
@@ -31,6 +32,14 @@ class ServicePrincipal(DirectoryObject):
 @dataclass(slots=True)
 class DirectoryGroup(DirectoryObject):
     mail_nickname: str
+
+
+@dataclass(slots=True)
+class ApplicationSecret:
+    key_id: str
+    display_name: str
+    secret_text: str
+    expires_on: datetime
 
 
 class IdentityProvisioner:
@@ -151,6 +160,114 @@ class IdentityProvisioner:
             display_name=item["displayName"],
             app_id=item["appId"],
             client_id=item["appId"],
+        )
+
+    def resolve_application_app_id(self, name: str) -> Optional[str]:
+        application = self._find_application(name)
+        if not application:
+            return None
+        response = self._authorized_request("GET", f"/v1.0/applications/{application.object_id}")
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = parse_json(response)
+        return payload.get("appId")
+
+    def get_group(self, name: str) -> Optional[DirectoryGroup]:
+        return self._find_group(name)
+
+    def get_service_principal(self, app_id: str) -> Optional[ServicePrincipal]:
+        return self._find_service_principal(app_id)
+
+    def get_application(self, name: str) -> Optional[DirectoryObject]:
+        return self._find_application(name)
+
+    def delete_group(self, name: str) -> bool:
+        group = self._find_group(name)
+        if not group:
+            logger.info("Azure AD group '%s' not found; skipping delete", name)
+            return False
+        response = self._authorized_request("DELETE", f"/v1.0/groups/{group.object_id}")
+        if response.status_code in {200, 202, 204}:
+            logger.info("Deleted Azure AD group '%s'", name)
+            return True
+        if response.status_code == 404:
+            logger.info("Azure AD group '%s' not found during delete", name)
+            return False
+        logger.error("Failed to delete Azure AD group '%s': %s", name, response.text)
+        response.raise_for_status()
+        return False
+
+    def delete_service_principal(self, app_id: str) -> bool:
+        service_principal = self._find_service_principal(app_id)
+        if not service_principal:
+            logger.info("Service principal with appId '%s' not found; skipping delete", app_id)
+            return False
+        response = self._authorized_request("DELETE", f"/v1.0/servicePrincipals/{service_principal.object_id}")
+        if response.status_code in {200, 202, 204}:
+            logger.info("Deleted service principal '%s'", service_principal.display_name)
+            return True
+        if response.status_code == 404:
+            logger.info("Service principal with appId '%s' not found during delete", app_id)
+            return False
+        logger.error(
+            "Failed to delete service principal '%s' (appId '%s'): %s",
+            service_principal.display_name,
+            app_id,
+            response.text,
+        )
+        response.raise_for_status()
+        return False
+
+    def delete_application(self, name: str) -> bool:
+        application = self._find_application(name)
+        if not application:
+            logger.info("Application '%s' not found; skipping delete", name)
+            return False
+        response = self._authorized_request("DELETE", f"/v1.0/applications/{application.object_id}")
+        if response.status_code in {200, 202, 204}:
+            logger.info("Deleted application '%s'", name)
+            return True
+        if response.status_code == 404:
+            logger.info("Application '%s' not found during delete", name)
+            return False
+        logger.error("Failed to delete application '%s': %s", name, response.text)
+        response.raise_for_status()
+        return False
+
+    def create_application_secret(
+        self,
+        app_object_id: str,
+        *,
+        display_name: Optional[str] = None,
+        validity_days: int = 730,
+    ) -> ApplicationSecret:
+        end_time = datetime.utcnow() + timedelta(days=validity_days)
+        payload = {
+            "passwordCredential": {
+                "displayName": display_name or "dam-automation",
+                "endDateTime": end_time.replace(microsecond=0).isoformat() + "Z",
+            }
+        }
+        response = self._authorized_request(
+            "POST",
+            f"/v1.0/applications/{app_object_id}/addPassword",
+            json=payload,
+        )
+        response.raise_for_status()
+        body = parse_json(response)
+        secret_text = body.get("secretText")
+        if not secret_text:
+            raise RuntimeError("Azure AD did not return a client secret for the application password")
+        expires_raw = body.get("endDateTime")
+        expires_on = datetime.utcnow()
+        if isinstance(expires_raw, str):
+            expires_on = datetime.fromisoformat(expires_raw.rstrip("Z"))
+        return ApplicationSecret(
+            key_id=body.get("keyId", body.get("id", "")),
+            display_name=body.get("displayName", display_name or ""),
+            secret_text=secret_text,
+            expires_on=expires_on,
         )
 
     def _authorized_request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
