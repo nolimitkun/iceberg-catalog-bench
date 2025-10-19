@@ -7,9 +7,14 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import BaseModel, Field, validator
-from pydantic import model_validator
-from pydantic import ConfigDict
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 
 class AzureConfig(BaseModel):
@@ -61,9 +66,10 @@ class DatabricksConfig(BaseModel):
         description="Scopes to request when fetching Databricks OAuth tokens",
     )
 
-    @validator("account_url")
-    def validate_account_url(cls, value: str, values: Dict[str, Any]) -> str:
-        workspace_url = values.get("workspace_url")
+    @field_validator("account_url")
+    @classmethod
+    def validate_account_url(cls, value: str, info: ValidationInfo) -> str:
+        workspace_url = (info.data or {}).get("workspace_url")
         if workspace_url and workspace_url.rstrip("/") == value.rstrip("/"):
             raise ValueError("databricks.account_url must be the Databricks accounts domain, not the workspace URL")
         parsed = urlparse(value)
@@ -176,8 +182,9 @@ class NamingConfig(BaseModel):
     prefix: Optional[str] = Field(default=None, description="Optional global prefix")
     separator: str = Field("-", description="Delimiter between naming segments")
 
-    @validator("separator")
-    def validate_separator(cls, value: str) -> str:  # noqa: D417 - pydantic validator signature
+    @field_validator("separator")
+    @classmethod
+    def validate_separator(cls, value: str) -> str:
         if len(value) > 1:
             raise ValueError("Separator must be a single character or empty string")
         return value

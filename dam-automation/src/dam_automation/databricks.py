@@ -227,24 +227,60 @@ class DatabricksProvisioner:
                 "access_connector_id": self._config.access_connector_id,
             },
         }
-        response = self._workspace_request("POST", "/api/2.1/unity-catalog/credentials", json=payload)
-        if response.status_code == 409:
-            logger.info("Storage credential '%s' already exists", name)
-            existing = self._workspace_request("GET", f"/api/2.1/unity-catalog/credentials/{name}")
-            existing.raise_for_status()
-            data = parse_json(existing)
-            return StorageCredential(name=data["name"], id=data["id"])
-        if response.status_code >= 400:
+        max_attempts = 5
+        backoff_seconds = 5.0
+        for attempt in range(1, max_attempts + 1):
+            response = self._workspace_request("POST", "/api/2.1/unity-catalog/credentials", json=payload)
+            if response.status_code == 409:
+                logger.info("Storage credential '%s' already exists", name)
+                existing = self._workspace_request("GET", f"/api/2.1/unity-catalog/credentials/{name}")
+                existing.raise_for_status()
+                data = parse_json(existing)
+                return StorageCredential(name=data["name"], id=data["id"])
+            if response.status_code < 400:
+                body = parse_json(response)
+                return StorageCredential(name=body["name"], id=body["id"])
+
             try:
                 error_body = response.json()
             except ValueError:
                 error_body = response.text
+
+            if (
+                self._should_retry_storage_credential(response.status_code, error_body)
+                and attempt < max_attempts
+            ):
+                logger.warning(
+                    "Databricks reported the managed identity was unavailable when creating storage credential "
+                    "'%s' (attempt %s/%s); waiting %.1fs before retrying",
+                    name,
+                    attempt,
+                    max_attempts,
+                    backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
+                backoff_seconds = min(backoff_seconds * 2, 60.0)
+                continue
+
             raise RuntimeError(
                 "Failed to create Unity Catalog storage credential: "
                 f"status={response.status_code}, body={error_body}"
             )
-        body = parse_json(response)
-        return StorageCredential(name=body["name"], id=body["id"])
+        raise RuntimeError(
+            "Failed to create Unity Catalog storage credential after retrying "
+            f"{max_attempts} times; last payload name='{name}'"
+        )
+
+    def _should_retry_storage_credential(self, status_code: int, error_body: Any) -> bool:
+        if status_code != 404:
+            return False
+        message = ""
+        if isinstance(error_body, dict):
+            message = str(error_body.get("message", ""))
+        else:
+            message = str(error_body)
+        retry_indicators = ("AADSTS700016", "was not found in the directory")
+        return any(indicator in message for indicator in retry_indicators)
 
     def ensure_external_location(self, name: str, url: str, credential_name: str) -> ExternalLocation:
         payload = {

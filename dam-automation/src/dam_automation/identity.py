@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import requests
@@ -90,6 +90,9 @@ class IdentityProvisioner:
             app.raise_for_status()
             app_body = parse_json(app)
             app_id = app_body["appId"]
+        return self.ensure_service_principal_by_app_id(app_id)
+
+    def ensure_service_principal_by_app_id(self, app_id: str) -> ServicePrincipal:
         existing = self._find_service_principal(app_id)
         if existing:
             return existing
@@ -242,7 +245,8 @@ class IdentityProvisioner:
         display_name: Optional[str] = None,
         validity_days: int = 730,
     ) -> ApplicationSecret:
-        end_time = datetime.utcnow() + timedelta(days=validity_days)
+        end_time = datetime.now(timezone.utc) + timedelta(days=validity_days)
+        end_time = end_time.replace(tzinfo=None)
         payload = {
             "passwordCredential": {
                 "displayName": display_name or "dam-automation",
@@ -260,7 +264,7 @@ class IdentityProvisioner:
         if not secret_text:
             raise RuntimeError("Azure AD did not return a client secret for the application password")
         expires_raw = body.get("endDateTime")
-        expires_on = datetime.utcnow()
+        expires_on = datetime.now(timezone.utc).replace(tzinfo=None)
         if isinstance(expires_raw, str):
             expires_on = datetime.fromisoformat(expires_raw.rstrip("Z"))
         return ApplicationSecret(

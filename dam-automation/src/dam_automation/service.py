@@ -11,7 +11,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from .auth import ClientCredentialProvider
 from .azure import AzureProvisioner, AzureIdentity
 from .config import AutomationConfig
-from .databricks import DatabricksProvisioner
+from .databricks import DatabricksProvisioner, StorageCredential
 from .identity import IdentityProvisioner, ServicePrincipal
 from .snowflake import (
     SnowflakeAuthorizationError,
@@ -151,7 +151,7 @@ class DatasourceAutomationService:
         else:
             databricks_client_secret_value = _create_databricks_secret()
 
-        storage_credential = self._databricks.ensure_storage_credential(normalized_name, identity.resource_id)
+        storage_credential = self._ensure_storage_credential(normalized_name, identity.resource_id)
         external_location = self._databricks.ensure_external_location(
             normalized_name,
             container.abfss_url,
@@ -405,6 +405,29 @@ class DatasourceAutomationService:
             return inferred_record, normalized_name, False
 
         return record, state_key, True
+
+    def _ensure_storage_credential(self, name: str, managed_identity_resource_id: str) -> StorageCredential:
+        try:
+            return self._databricks.ensure_storage_credential(name, managed_identity_resource_id)
+        except RuntimeError as exc:
+            missing_app_id = self._extract_missing_application_id(str(exc))
+            if not missing_app_id:
+                raise
+            logger.warning(
+                "Databricks reported missing Azure AD application '%s' while creating storage credential '%s'. "
+                "Attempting to provision the service principal automatically.",
+                missing_app_id,
+                name,
+            )
+            self._identity.ensure_service_principal_by_app_id(missing_app_id)
+            return self._databricks.ensure_storage_credential(name, managed_identity_resource_id)
+
+    @staticmethod
+    def _extract_missing_application_id(message: str) -> str | None:
+        match = re.search(r"Application with identifier '([0-9a-fA-F-]{36})' was not found", message)
+        if match:
+            return match.group(1)
+        return None
 
     def _delete_snowflake_resources(self, normalized_name: str, resources: DatasourceResources) -> DeletionOutcome:
         external_volume_name = resources.snowflake_external_volume_name or normalized_name

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 
@@ -32,7 +32,7 @@ class DatasourceResources:
     snowflake_external_volume_name: str
     snowflake_catalog_integration_name: str
     snowflake_database_name: str
-    created_at: datetime = field(default_factory=lambda: datetime.utcnow())
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 @dataclass(slots=True)
@@ -43,17 +43,17 @@ class DatasourceRecord:
     resources: DatasourceResources
     status: str = "succeeded"
     last_error: Optional[str] = None
-    updated_at: datetime = field(default_factory=lambda: datetime.utcnow())
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     def mark_failed(self, error: Exception) -> None:
         self.status = "failed"
         self.last_error = str(error)
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     def mark_succeeded(self) -> None:
         self.status = "succeeded"
         self.last_error = None
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass(slots=True)
